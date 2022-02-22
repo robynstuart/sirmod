@@ -152,3 +152,60 @@ def gettvecdt(tvec=None, dt=None, justdt=False):
     return tvec, dt
 
 
+####################################################################################
+# Distance functions
+####################################################################################
+def prep_distance(model, fitto=None):
+    ''' Pre-process model to get out model results and data for calculating distance'''
+
+    # Handle inputs
+    results = sc.dcp(model.results)
+    if fitto is None:
+        fitto = ['pop_size', 'prev']
+
+    modely, datay = np.array([]), np.array([])
+
+    for key in fitto:
+        thisres = results[key]
+        tmpdata = thisres.datapops
+        modelrows = thisres.pops
+
+        # First extract datay
+        if tmpdata is not None:
+            datarows = tmpdata[0]  # Pull out best data
+            nrows = len(datarows)
+            for row in range(nrows):  # Loop over each available row (pops if it's a by-pop result, or single row if it's a total result)
+                datarow = datarows[row]
+                thisdatay = datarow[~np.isnan(datarow)]
+                datay = np.append(datay, thisdatay)
+
+                # Now extract modely, if available
+                if modelrows is not None:
+                    if len(modelrows.shape) > 1:    modelrow = modelrows[row]
+                    else:                           modelrow = modelrows
+                    thismodely = modelrow[~np.isnan(datarow)]
+                    modely = np.append(modely, thismodely)
+
+    return modely, datay
+
+
+def distance(model=None, data=None, method='wape', eps=1e-3):
+    ''' Evaluate how well the model fits to the data '''
+
+    if method == 'wape':
+        mismatch = np.sum(abs(model["Y"] - data["Y"]) / np.mean(data["Y"] + eps))
+    elif method == 'mape':
+        mismatch = np.sum(abs(model["Y"] - data["Y"]) / (data["Y"] + eps))
+    elif method == 'mad':
+        mismatch = np.sum(abs(model["Y"] - data["Y"]))
+    elif method == 'mse':
+        mismatch = np.sum((model["Y"] - data["Y"]) ** 2)
+    else:
+        errormsg = f'"method" not known; you entered {method}, but must be one of:\n'
+        errormsg += '"wape" = weighted absolute percentage error (default)\n'
+        errormsg += '"mape" = mean absolute percentage error\n'
+        errormsg += '"mad"  = mean absolute difference\n'
+        errormsg += '"mse"  = mean squared error'
+        raise Exception(errormsg)
+
+    return mismatch

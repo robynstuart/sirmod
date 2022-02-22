@@ -15,13 +15,12 @@ from . import data as smd
 # Define the model
 class Model():
 
-    def __init__(self, label=None, data_sheet=None, verbose=1, make_pars=True, make_simpars=False):
+    def __init__(self, label=None, data_sheet=None, verbose=1, make_pars=True, make_simpars=False, init_results=True):
 
         # Set attributes
         self.label          = label    # The label/name of the simulation
         self.created        = None     # The datetime the sim was created
         self.t              = None     # The current time in the simulation (during execution); outside of sim.step(), its value corresponds to next timestep to be computed
-        self.results        = {}       # For storing results
         self.dt             = 0.2  # Timestep
         self.start          = 2015.0  # Default start year
         self.now            = 2022.0  # Default current year
@@ -43,6 +42,13 @@ class Model():
         # Load datasheet, if provided
         if data_sheet is not None:
             self.load_data(data_sheet=data_sheet, make_pars=make_pars, make_simpars=make_simpars)
+
+        # Initialize results
+        if init_results:
+            self.init_results()
+        else:
+            self.results = {}  # For storing results
+
         return
 
 
@@ -58,7 +64,7 @@ class Model():
         return
 
 
-    def interpolate_pars(self, pars, smoothness=1, sample=None, tosample=None, randseed=None):
+    def interpolate_pars(self, pars, smoothness=1):
         ''' Interpolate parameters '''
 
         # Handle inputs and initialization
@@ -76,11 +82,8 @@ class Model():
         # Loop over requested keys
         for key in keys:  # Loop over all keys
             if isinstance(pars[key], smpars.Par):
-                thissample = sample  # Make a copy of it to check it against the list of things we are sampling
-                if tosample and tosample[0] is not None and key not in tosample: thissample = False  # Don't sample from unselected parameters -- tosample[0] since it's been promoted to a list
                 try:
-                    simpars[key] = pars[key].interp(tvec=self.tvec, dt=self.dt, popkeys=self.popkeys,
-                                                    smoothness=smoothness, sample=thissample, randseed=randseed)
+                    simpars[key] = pars[key].interp(tvec=self.tvec, dt=self.dt, popkeys=self.popkeys, smoothness=smoothness)
                 except Exception as E:
                     errormsg = f'Could not figure out how to interpolate parameter {key}'
                     errormsg += f'Error: {repr(E)}'
@@ -172,6 +175,11 @@ class Model():
         self.results['pop_size']        = smu.Result('Population size')
         self.results['numinf']          = smu.Result('Number currently infected')
 
+        # Add the results that have data associated with them
+        trailingnans = np.zeros((3,self.npops,len(self.projyears))) + np.nan # 3 represents dimensions of [best, low, high]
+        self.results['prev'].datapops       = np.append(np.array(self.data['prev']), trailingnans, axis=2)
+        self.results['pop_size'].datapops   = np.append(np.array(self.data['pop_size']), trailingnans, axis=2) # 3 represents dimensions of [best, low, high]
+
         # Raw arrays -- reporting annual quantities (so need to divide by dt!)
         raw = sc.odict()
         raw['inci']         = np.zeros((self.npops, self.npts))  # Total incidence acquired by each population
@@ -208,15 +216,11 @@ class Model():
         self.results['numinf'].pops     = allpeople[1, :, indices].transpose()
         self.results['numinf'].tot      = allpeople[1, :, indices].sum(axis=1)
 
-        # Now add the results that have data associated with them
-        trailingnans = np.zeros((3,self.npops,len(self.projyears))) + np.nan # 3 represents dimensions of [best, low, high]
+        # Add the results that have data associated with them
         self.results['prev'].pops           = allpeople[1, :, indices].transpose() / (self.eps + allpeople[:, :, indices].sum(axis=0))
         self.results['prev'].tot            = allpeople[1, :, indices].sum(axis=1) / (self.eps + allpeople[:, :, indices].sum(axis=(0, 1)))
-        self.results['prev'].datapops       = np.append(np.array(self.data['prev']), trailingnans, axis=2)
-
         self.results['pop_size'].pops       = allpeople[:, :, indices].sum(axis=0)
         self.results['pop_size'].tot        = allpeople[:, :, indices].sum(axis=(0, 1))
-        self.results['pop_size'].datapops   = np.append(np.array(self.data['pop_size']), trailingnans, axis=2) # 3 represents dimensions of [best, low, high]
 
         # Now add the data distributions
         datadists = {'prev': 'trunc_norm', 'pop_size': 'norm'}
@@ -244,11 +248,11 @@ class Model():
 
         # Deal with metapars
         if metapars is None:
-            foi_meta            = self.simpars['foi_meta']
-            death_other_meta    = self.simpars['death_other_meta']
-            death_meta          = self.simpars['death_meta']
-            birth_meta          = self.simpars['birth_meta']
-            rec_meta            = self.simpars['rec_meta']
+            foi_meta            = np.ones(self.npops)
+            death_other_meta    = np.ones(self.npops)
+            death_meta          = np.ones(self.npops)
+            birth_meta          = np.ones(self.npops)
+            rec_meta            = np.ones(self.npops)
         else:
             foi_meta            = np.array([metapars['foi_meta_M'],metapars['foi_meta_F']])
             death_other_meta    = np.array([metapars['death_other_meta_M'],metapars['death_other_meta_F']])
@@ -308,13 +312,11 @@ class Model():
         return new_people, raw
 
 
-    def run(self, verbose=1, metapars=None, sample=False, tosample=None):
+    def run(self, metapars=None, verbose=1):
         ''' Run the model '''
 
         # Initialize results, acts, births, and people
-        if tosample is None:
-            tosample = [par for par in self.pars.keys() if par[-4:]=='meta']+['init_prev']
-        self.simpars            = self.interpolate_pars(self.pars, sample=sample, tosample=tosample)
+        self.simpars            = self.interpolate_pars(self.pars)
         raw                     = self.init_results()
         sexactslist             = self.process_acts()
         birthslist, motherpops  = self.process_births()
@@ -336,61 +338,8 @@ class Model():
         return
 
 
-    def get_fit(self, results=None, data=None, fitto=None, method='wape'):
-        ''' Evaluate how well the model fits to the data '''
-
-        # Handle inputs
-        if results is None:
-            results = self.results
-        if data is None:
-            data = self.data
-        if fitto is None:
-            fitto = ['pop_size', 'prev']
-
-        # Shorten names and initialize storage
-        eps = self.eps
-        allmismatches = []
-        count = 0
-        mismatch = 0
-
-        # Loop over all results
-        for key in fitto:
-            thisres = self.results[key]
-            tmpdata = thisres.datapops
-            if tmpdata is not None:
-                modelrows = thisres.pops
-                datarows = tmpdata[0] # Pull out best data
-                nrows = len(datarows)
-                for row in range(nrows):  # Loop over each available row (pops if it's a by-pop result, or single row if it's a total result)
-                    datarow = datarows[row]
-                    if len(modelrows.shape) > 1:
-                        modelrow = modelrows[row]
-                    else:
-                        modelrow = modelrows
-                    datax, datay = smu.extractdata(self.results['tvec'], datarow)  # Pull out the not-NaN values
-                    for i, year in enumerate(datax):  # Loop over each data point available
-                        count += 1
-                        modelx = sc.findinds(self.results['tvec'], year)  # Find the index of the corresponding time point
-                        modely = modelrow[modelx]  # Finally, extract the model result!
-                        if method == 'wape':
-                            thismismatch = abs(modely - datay[i]) / np.mean(datay + eps)
-                        elif method == 'mape':
-                            thismismatch = abs(modely - datay[i]) / (datay[i] + eps)
-                        elif method == 'mad':
-                            thismismatch = abs(modely - datay[i])
-                        elif method == 'mse':
-                            thismismatch = (modely - datay[i]) ** 2
-                        elif method == 'cdf':
-                            thismismatch = smu.get_q(modely, **thisres.datadist[row][year])
-                        else:
-                            errormsg = f'autofit(): "method" not known; you entered {method}, but must be one of:\n'
-                            errormsg += '"wape" = weighted absolute percentage error (default)\n'
-                            errormsg += '"mape" = mean absolute percentage error\n'
-                            errormsg += '"mad"  = mean absolute difference\n'
-                            errormsg += '"cdf"  = distance based on probability distribution of the data\n'
-                            errormsg += '"mse"  = mean squared error'
-                            raise Exception(errormsg)
-                        allmismatches.append(thismismatch)
-                        mismatch += thismismatch
-
-        return mismatch
+    def abc_run(self, metapars=None, verbose=1):
+        ''' A slightly different API for running the model with ABC '''
+        self.run(metapars=metapars,verbose=verbose)
+        modely, _ = smu.prep_distance(self)
+        return {"Y":modely}
