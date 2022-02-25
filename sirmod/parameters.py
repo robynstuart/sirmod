@@ -10,43 +10,6 @@ import sciris as sc
 from . import utils as smu
 from xlrd import open_workbook, colname
 
-
-# # Helper functions
-# def make_pars(format='dists', size=None):
-#     '''
-#     Create scale factors over each of the parameters in the model
-#     Args:
-#         format (str): 'sample' returns a sample of size "size" of each parameter, 'dists' returns the distributions, 'point_estimate' returns the mean (best) estimates
-#     '''
-#     pardists = sc.objdict()
-#     pardists.init_prev      = dict(dist='trunc_norm', par1=1, lower_95=0.5, upper_95=2, lower_clip=0, upper_clip=5)  # Initial prevalence
-#     pardists.death_other    = dict(dist='trunc_norm', par1=1, lower_95=0.5, upper_95=2, lower_clip=0, upper_clip=5)  # Annual probability of death from other causes
-#     pardists.death          = dict(dist='trunc_norm', par1=1, lower_95=0.5, upper_95=2, lower_clip=0, upper_clip=5)  # Annual probability of death from modelled disease
-#     pardists.birth          = dict(dist='trunc_norm', par1=1, lower_95=0.5, upper_95=2, lower_clip=0, upper_clip=5)  # Birth rate
-#     pardists.foi            = dict(dist='trunc_norm', par1=1, lower_95=0.5, upper_95=2, lower_clip=0, upper_clip=5)  # Force of infection
-#
-#     # Derive stdev from 95% confidence intervals
-#     for k,v in pardists.items():
-#         if v.get('par2') is None:
-#             v['par2'] = (v['upper_95']-v['lower_95'])/1.96
-#
-#     # Return parameters in the desired format
-#     if format=='point_estimate':
-#         pars = {k:v['par1'] for k,v in pardists.items()}
-#     elif format=='sample':
-#         pars = {}
-#         for k,v in pardists.items():
-#             v.update(size=size)
-#             pars = {k:hmu.sample(**v) for k,v in pardists.items()}
-#     elif format=='dists':
-#         pars = pardists
-#     else:
-#         errormsg = f'The selected format "{format}" is not implemented.'
-#         raise NotImplementedError(errormsg)
-#
-#     return pars
-#
-
 def load_par_specs(file_name='model-inputs.xlsx', folder='../sirmod', sheet_name='Model parameters'):
     '''  Function to parse the parameter definitions from the spreadsheet and return a structure that can be used to generate the parameters '''
     sheet_name = 'Model parameters'
@@ -119,7 +82,6 @@ class Metapar(Par):
     def __init__(self, y=None, prior=None, **defaultargs):
         Par.__init__(self, **defaultargs)
         self.y = y
-        self.ysample = None
         if not self.limits or self.limits is None:
             self.limits = (0.05, 50)  # Arbitrary for metapars
         if isinstance(prior, dict):
@@ -136,23 +98,8 @@ class Metapar(Par):
         ''' Return the valid keys for using with this parameter '''
         return self.y.keys()
 
-    def sample(self, randseed=None, size=1):
-        ''' Recalculate ysample '''
-        self.ysample = sc.odict()
-        for key in self.keys():
-            args = sc.mergedicts(self.prior[key],dict(randseed=randseed, size=size))
-            self.ysample[key] = smu.sample(**args)
-        return None
-
-    def interp(self, tvec=None, dt=None, smoothness=None, asarray=True, sample=None, randseed=None,
-               popkeys=None, size=1):  # Keyword arguments are for consistency but not actually used
-        # Figure out sample
-        if not sample:
-            y = self.y
-        else:
-            if sample == 'new' or self.ysample is None: self.sample(randseed=randseed, size=size)  # msample doesn't exist, make it
-            y = self.ysample
-
+    def interp(self, tvec=None, dt=None, smoothness=None, asarray=True, popkeys=None, size=1):  # Keyword arguments are for consistency but not actually used
+        y = self.y
         dt = smu.gettvecdt(tvec=tvec, dt=dt, justdt=True)  # Method for getting dt
         outkeys = getoutkeys(self, popkeys)  # Get the list of keys for the output
         if asarray:
@@ -208,9 +155,8 @@ class Timepar(Par):
         else:
             return output
 
-    def interp(self, tvec=None, dt=None, smoothness=None, asarray=True, sample=None, randseed=None,
-               popkeys=None):
-        """ Take parameters and turn them into model parameters """
+    def interp(self, tvec=None, dt=None, smoothness=None, asarray=True, popkeys=None):
+        ''' Take parameters and turn them into model parameters '''
 
         # Validate input
         if tvec is None:
@@ -266,7 +212,7 @@ def getvalidyears(years, validdata, defaultind=0):
             validyears = array(
                 [array(years)[defaultind]])  # Use the default index; usually either 0 (start) or -1 (end)
     else:
-        validyears = array([0.0])  # No valid years, return 0 -- NOT an empty array, as you might expect!
+        validyears = array([0.0])  # No valid years, return 0
     return validyears
 
 

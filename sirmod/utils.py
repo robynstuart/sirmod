@@ -152,3 +152,73 @@ def gettvecdt(tvec=None, dt=None, justdt=False):
     return tvec, dt
 
 
+####################################################################################
+# Distance functions
+####################################################################################
+def prep_distance(model, fitto=None):
+    ''' Pre-process model to get out model results and data for calculating distance'''
+
+    # Handle inputs
+    results = sc.dcp(model.results)
+    if fitto is None:
+        fitto = ['pop_size', 'numinf']
+
+    modely, datay = sc.objdict(), sc.objdict()
+
+    for key in fitto:
+        thisres = results[key]
+        tmpdata = thisres.datapops
+        modelrows = thisres.pops
+
+        # First extract datay
+        if tmpdata is not None:
+            datarows = tmpdata[0]  # Pull out best data
+            for pn, popkey in enumerate(model.popkeys):
+                newkey = key+'_'+popkey
+                datarow = datarows[pn]
+                thisdatay = datarow[~np.isnan(datarow)]
+                datay[newkey] = thisdatay
+
+                # Now extract modely, if available
+                if modelrows is not None:
+                    if len(modelrows.shape) > 1:    modelrow = modelrows[pn]
+                    else:                           modelrow = modelrows
+                    thismodely = modelrow[~np.isnan(datarow)]
+                    modely[newkey] = thismodely
+
+    return modely, datay
+
+
+def distance(modely=None, datay=None, fitto='pop_size', method='wape', eps=1e-3):
+    ''' Evaluate how well the model fits to the data '''
+
+    pops = ['M', 'F'] # TODO Remove hardcoding
+    mismatch = 0
+    for pop in pops:
+        key = fitto+'_'+pop
+        if method == 'wape':
+            thismismatch = np.sum(abs(modely[key] - datay[key]) / np.mean(datay[key] + eps))
+        elif method == 'mape':
+            thismismatch = np.sum(abs(modely[key] - datay[key]) / (datay[key] + eps))
+        elif method == 'mad':
+            thismismatch = np.sum(abs(modely[key] - datay[key]))
+        elif method == 'mse':
+            thismismatch = np.sum((modely[key] - datay[key]) ** 2)
+        else:
+            errormsg = f'"method" not known; you entered {method}, but must be one of:\n'
+            errormsg += '"wape" = weighted absolute percentage error (default)\n'
+            errormsg += '"mape" = mean absolute percentage error\n'
+            errormsg += '"mad"  = mean absolute difference\n'
+            errormsg += '"mse"  = mean squared error'
+            raise Exception(errormsg)
+
+        mismatch += thismismatch
+
+    return mismatch
+
+
+def distance_popsize(modely=None, datay=None, method='wape', eps=1e-3):
+    return distance(modely=modely, datay=datay, fitto='pop_size', method=method, eps=eps)
+
+def distance_numinf(modely=None, datay=None, method='wape', eps=1e-3):
+    return distance(modely=modely, datay=datay, fitto='numinf', method=method, eps=eps)

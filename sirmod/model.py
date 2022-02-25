@@ -1,5 +1,5 @@
 '''
-Define the core model for HPV
+Core code for defining and running the model
 '''
 
 # Imports
@@ -10,18 +10,16 @@ from scipy.stats import truncnorm
 from . import utils as smu
 from . import parameters as smpars
 from . import data as smd
+from . import plotting as smplt
 
 
 # Define the model
-class Model():
-
-    def __init__(self, label=None, data_sheet=None, verbose=1, make_pars=True, make_simpars=False):
-
+class BaseModel():
+    def __init__(self, label=None, verbose=1):
         # Set attributes
         self.label          = label    # The label/name of the simulation
         self.created        = None     # The datetime the sim was created
         self.t              = None     # The current time in the simulation (during execution); outside of sim.step(), its value corresponds to next timestep to be computed
-        self.results        = {}       # For storing results
         self.dt             = 0.2  # Timestep
         self.start          = 2015.0  # Default start year
         self.now            = 2022.0  # Default current year
@@ -39,12 +37,20 @@ class Model():
         self.healthstatesfull = ['Susceptible', 'Infected', 'Recovered', 'Dead', 'Dead other']
         self.verbose        = verbose
         self.eps            = 1e-3  # A small number used to avoid /0 errors
+        return
 
+
+
+class Model(BaseModel):
+
+    def __init__(self, data_sheet=None, init_results=True, make_pars=True, make_simpars=False, **kwargs):
+        super().__init__(**kwargs)
         # Load datasheet, if provided
         if data_sheet is not None:
             self.load_data(data_sheet=data_sheet, make_pars=make_pars, make_simpars=make_simpars)
+        if init_results:    self.init_results()
+        else:               self.results = {}
         return
-
 
     def load_data(self, data_sheet=None, make_pars=True, make_simpars=False):
         ''' Load in a datasheet '''
@@ -57,8 +63,7 @@ class Model():
                 self.simpars    = self.interpolate_pars(self.pars)
         return
 
-
-    def interpolate_pars(self, pars, smoothness=1, sample=None, tosample=None, randseed=None):
+    def interpolate_pars(self, pars, smoothness=1):
         ''' Interpolate parameters '''
 
         # Handle inputs and initialization
@@ -76,18 +81,14 @@ class Model():
         # Loop over requested keys
         for key in keys:  # Loop over all keys
             if isinstance(pars[key], smpars.Par):
-                thissample = sample  # Make a copy of it to check it against the list of things we are sampling
-                if tosample and tosample[0] is not None and key not in tosample: thissample = False  # Don't sample from unselected parameters -- tosample[0] since it's been promoted to a list
                 try:
-                    simpars[key] = pars[key].interp(tvec=self.tvec, dt=self.dt, popkeys=self.popkeys,
-                                                    smoothness=smoothness, sample=thissample, randseed=randseed)
+                    simpars[key] = pars[key].interp(tvec=self.tvec, dt=self.dt, popkeys=self.popkeys, smoothness=smoothness)
                 except Exception as E:
                     errormsg = f'Could not figure out how to interpolate parameter {key}'
                     errormsg += f'Error: {repr(E)}'
                     raise Exception(errormsg)
 
         return simpars
-
 
     def init_compartments(self):
         ''' Initialize people into compartments '''
@@ -97,7 +98,6 @@ class Model():
         init_people[0,:] = simpars['init_pop'][:] * (1 - simpars['init_prev'][:])
         init_people[1,:] = simpars['init_pop'][:] * simpars['init_prev'][:]  # Set initial infected population
         return init_people
-
 
     def process_acts(self):
         ''' Compute the effective numbers of acts '''
@@ -144,7 +144,6 @@ class Model():
 
         return sexactslist
 
-
     def process_births(self):
         ''' Allocate births '''
         birth = self.simpars['birth'] * self.dt
@@ -158,36 +157,47 @@ class Model():
         motherpops = set([thisbirth[0] for thisbirth in birthslist])
         return birthslist, motherpops
 
-
     def init_results(self):
         ''' Store the results '''
-        self.results = sc.odict()
+        self.results = sc.objdict()
+
+        # Store some general useful things
+        self.results['popkeys'] = self.popkeys
         self.results['inci']            = smu.Result('New infections')
         self.results['births']          = smu.Result('Total births)')
         self.results['deaths']          = smu.Result('Disease-related deaths')
         self.results['deaths_other']    = smu.Result('Non-disease-related deaths')
-        self.results['recoveries']      = smu.Result('Recoveries')
+        self.results['newrec']          = smu.Result('New recoveries')
         self.results['prev']            = smu.Result('Prevalence (%)', ispercentage=True)
         self.results['force']           = smu.Result('Incidence (per 100 p.y.)', ispercentage=True)
         self.results['pop_size']        = smu.Result('Population size')
+        self.results['numsus']          = smu.Result('Number currently susceptible')
         self.results['numinf']          = smu.Result('Number currently infected')
+        self.results['numrec']          = smu.Result('Number currently recovered')
+
+        # Add the results that have data associated with them
+        trailingnans = np.zeros((3,self.npops,len(self.projyears))) + np.nan # 3 represents dimensions of [best, low, high]
+        self.results['prev'].datapops       = np.append(np.array(self.data['prev']), trailingnans, axis=2)
+        self.results['pop_size'].datapops   = np.append(np.array(self.data['pop_size']), trailingnans, axis=2) # 3 represents dimensions of [best, low, high]
+        self.results['pop_size'].datatot    = self.results['pop_size'].datapops.sum(axis=1)
+        self.results['numinf'].datapops     = self.results['prev'].datapops*self.results['pop_size'].datapops
+        self.results['numinf'].datatot      = self.results['numinf'].datapops.sum(axis=1)
+        self.results['prev'].datatot        = self.results['numinf'].datatot / self.results['pop_size'].datatot
 
         # Raw arrays -- reporting annual quantities (so need to divide by dt!)
         raw = sc.odict()
         raw['inci']         = np.zeros((self.npops, self.npts))  # Total incidence acquired by each population
-        raw['recoveries']   = np.zeros((self.npops, self.npts)) # Recoveries by population
+        raw['newrec']       = np.zeros((self.npops, self.npts)) # Recoveries by population
         raw['births']       = np.zeros((self.npops, self.npts))  # Total number of births to each population
         raw['deaths']       = np.zeros((self.npops, self.npts))  # Number of deaths per timestep
         raw['deaths_other'] = np.zeros((self.npops, self.npts))  # Number of other deaths per timestep
 
         return raw
 
-
-    def process_results(self, raw, allpeople, data=None, quantiles=None, annual=True, doround=True):
+    def process_results(self, raw, allpeople, data=None, annual=True, doround=True):
         ''' Process results for plots and other outputs'''
 
         # Initialize
-        if quantiles is None: quantiles = [0.5, 0.25, 0.75]
         if annual is False: # Decide what to do with the time vector
             indices = np.arange(len(self.ntvec)) # Use all indices
             ntvec   = sc.dcp(self.ntvec)
@@ -197,9 +207,10 @@ class Model():
 
         self.results['tvec'] = self.tvec[indices]
         self.results['ntvec'] = ntvec
+        self.results['datayears'] = self.datayears
 
         # Actually do calculations
-        for key in ['inci', 'births', 'deaths', 'deaths_other', 'recoveries']:
+        for key in ['inci', 'births', 'deaths', 'deaths_other', 'newrec']:
             self.results[key].pops = raw[key][:, indices]
             self.results[key].tot = raw[key][:, indices].sum(axis=0)
 
@@ -207,16 +218,16 @@ class Model():
         self.results['force'].tot       = raw['inci'][:, indices].sum(axis=0) / (self.eps + allpeople[0, :, indices].sum(axis=1))
         self.results['numinf'].pops     = allpeople[1, :, indices].transpose()
         self.results['numinf'].tot      = allpeople[1, :, indices].sum(axis=1)
+        self.results['numsus'].pops     = allpeople[0, :, indices].transpose()
+        self.results['numsus'].tot      = allpeople[0, :, indices].sum(axis=1)
+        self.results['numrec'].pops     = allpeople[2, :, indices].transpose()
+        self.results['numrec'].tot      = allpeople[2, :, indices].sum(axis=1)
 
-        # Now add the results that have data associated with them
-        trailingnans = np.zeros((3,self.npops,len(self.projyears))) + np.nan # 3 represents dimensions of [best, low, high]
+        # Add the results that have data associated with them
         self.results['prev'].pops           = allpeople[1, :, indices].transpose() / (self.eps + allpeople[:, :, indices].sum(axis=0))
         self.results['prev'].tot            = allpeople[1, :, indices].sum(axis=1) / (self.eps + allpeople[:, :, indices].sum(axis=(0, 1)))
-        self.results['prev'].datapops       = np.append(np.array(self.data['prev']), trailingnans, axis=2)
-
         self.results['pop_size'].pops       = allpeople[:, :, indices].sum(axis=0)
         self.results['pop_size'].tot        = allpeople[:, :, indices].sum(axis=(0, 1))
-        self.results['pop_size'].datapops   = np.append(np.array(self.data['pop_size']), trailingnans, axis=2) # 3 represents dimensions of [best, low, high]
 
         # Now add the data distributions
         datadists = {'prev': 'trunc_norm', 'pop_size': 'norm'}
@@ -231,7 +242,6 @@ class Model():
                 datadist[popkey] = {years[i]: dict(dist=dist, par1=best[i], par2=par2[i], lower_clip=0, upper_clip=1) for i in range(len(best))}
             self.results[datatype].datadist = datadist
 
-
     def step(self, t, people, raw, sexactslist, birthslist, motherpops, metapars=None):
         ''' Calculate probability of getting infected '''
 
@@ -244,11 +254,11 @@ class Model():
 
         # Deal with metapars
         if metapars is None:
-            foi_meta            = self.simpars['foi_meta']
-            death_other_meta    = self.simpars['death_other_meta']
-            death_meta          = self.simpars['death_meta']
-            birth_meta          = self.simpars['birth_meta']
-            rec_meta            = self.simpars['rec_meta']
+            foi_meta            = np.ones(self.npops)
+            death_other_meta    = np.ones(self.npops)
+            death_meta          = np.ones(self.npops)
+            birth_meta          = np.ones(self.npops)
+            rec_meta            = np.ones(self.npops)
         else:
             foi_meta            = np.array([metapars['foi_meta_M'],metapars['foi_meta_F']])
             death_other_meta    = np.array([metapars['death_other_meta_M'],metapars['death_other_meta_F']])
@@ -273,6 +283,17 @@ class Model():
         prob_acquire_inf    = (1-forceinffull).sum(axis=1)  # Probability of each population acquiring an infection
         prob_cause_inf      = (1-forceinffull).sum(axis=0)  # Probability of each population causing an infection
 
+        # Safety checks: don't let too many people move - warning, not tested
+        if (rec_meta * recrate + death_other_meta * death_other + death_meta * death>1).any():
+            scalefactor = rec_meta * recrate + death_other_meta * death_other + death_meta * death
+            rec_meta /= scalefactor
+            death_other_meta /= scalefactor
+            death_meta /= scalefactor
+        if (foi_meta*prob_acquire_inf + death_other_meta*death_other>1).any():
+            scalefactor = foi_meta*prob_acquire_inf + death_other_meta*death_other
+            foi_meta /= scalefactor
+            death_other_meta /= scalefactor
+
         # Define transitions
         thistransit[0, 0, :] = 1. - foi_meta*prob_acquire_inf - death_other_meta*death_other            # sus to sus
         thistransit[0, 1, :] = foi_meta*prob_acquire_inf                                                # sus to inf
@@ -296,7 +317,7 @@ class Model():
 
         # Store results
         raw['inci'][:, t]           = (people[0, :] * thistransit[0, 1, :]).sum()/self.dt
-        raw['recoveries'][:, t]     = (people[1, :] * thistransit[1, 2, :]).sum()/self.dt
+        raw['newrec'][:, t]         = (people[1, :] * thistransit[1, 2, :]).sum()/self.dt
         raw['deaths'][:, t]         = (people[:, :] * thistransit[:, 3, :]).sum()/self.dt
         raw['deaths_other'][:, t]   = (people[:, :] * thistransit[:, 4, :]).sum()/self.dt
 
@@ -307,14 +328,11 @@ class Model():
 
         return new_people, raw
 
-
-    def run(self, verbose=1, metapars=None, sample=False, tosample=None):
-        ''' Run the model '''
+    def run(self, metapars=None, verbose=1, keep_raw=True):
+        ''' Run the model once '''
 
         # Initialize results, acts, births, and people
-        if tosample is None:
-            tosample = [par for par in self.pars.keys() if par[-4:]=='meta']+['init_prev']
-        self.simpars            = self.interpolate_pars(self.pars, sample=sample, tosample=tosample)
+        self.simpars            = self.interpolate_pars(self.pars)
         raw                     = self.init_results()
         sexactslist             = self.process_acts()
         birthslist, motherpops  = self.process_births()
@@ -329,68 +347,157 @@ class Model():
                 allpeople[:,:,t]    = new_people
 
         # Finalize and process
-        self.raw = raw
+        if keep_raw: self.raw = raw
         self.people = allpeople
         self.process_results(raw, allpeople)
 
         return
 
+    def abc_run(self, metapars=None, verbose=1):
+        ''' A slightly different API for running the model with ABC '''
+        self.run(metapars=metapars,verbose=verbose)
+        modely, _ = smu.prep_distance(self)
+        return modely
 
-    def get_fit(self, results=None, data=None, fitto=None, method='wape'):
-        ''' Evaluate how well the model fits to the data '''
+    def plot(self, toplot=None):
+        ''' Plot the outputs of the model '''
+        pass
 
-        # Handle inputs
-        if results is None:
-            results = self.results
-        if data is None:
-            data = self.data
-        if fitto is None:
-            fitto = ['pop_size', 'prev']
 
-        # Shorten names and initialize storage
-        eps = self.eps
-        allmismatches = []
-        count = 0
-        mismatch = 0
+##############################################################################
+# Running functions
+##############################################################################
+def single_run(model, ind=0, run_args=None, verbose=1, **kwargs):
+    '''
+    Convenience function to perform a single model run.
+    '''
+    run_args = sc.mergedicts({'verbose':verbose}, run_args, kwargs)
+    if verbose is None:
+        verbose = model.verbose
+    if not model.label:
+        model.label = f'Model {ind}'
+    if verbose>=1:
+        print(f'Running {model.label}')
+    model.run(**run_args)
+    return model
 
-        # Loop over all results
-        for key in fitto:
-            thisres = self.results[key]
-            tmpdata = thisres.datapops
-            if tmpdata is not None:
-                modelrows = thisres.pops
-                datarows = tmpdata[0] # Pull out best data
-                nrows = len(datarows)
-                for row in range(nrows):  # Loop over each available row (pops if it's a by-pop result, or single row if it's a total result)
-                    datarow = datarows[row]
-                    if len(modelrows.shape) > 1:
-                        modelrow = modelrows[row]
-                    else:
-                        modelrow = modelrows
-                    datax, datay = smu.extractdata(self.results['tvec'], datarow)  # Pull out the not-NaN values
-                    for i, year in enumerate(datax):  # Loop over each data point available
-                        count += 1
-                        modelx = sc.findinds(self.results['tvec'], year)  # Find the index of the corresponding time point
-                        modely = modelrow[modelx]  # Finally, extract the model result!
-                        if method == 'wape':
-                            thismismatch = abs(modely - datay[i]) / np.mean(datay + eps)
-                        elif method == 'mape':
-                            thismismatch = abs(modely - datay[i]) / (datay[i] + eps)
-                        elif method == 'mad':
-                            thismismatch = abs(modely - datay[i])
-                        elif method == 'mse':
-                            thismismatch = (modely - datay[i]) ** 2
-                        elif method == 'cdf':
-                            thismismatch = smu.get_q(modely, **thisres.datadist[row][year])
-                        else:
-                            errormsg = f'autofit(): "method" not known; you entered {method}, but must be one of:\n'
-                            errormsg += '"wape" = weighted absolute percentage error (default)\n'
-                            errormsg += '"mape" = mean absolute percentage error\n'
-                            errormsg += '"mad"  = mean absolute difference\n'
-                            errormsg += '"cdf"  = distance based on probability distribution of the data\n'
-                            errormsg += '"mse"  = mean squared error'
-                            raise Exception(errormsg)
-                        allmismatches.append(thismismatch)
-                        mismatch += thismismatch
 
-        return mismatch
+def multi_run(model, n_runs=4, metapars=None, run_args=None, par_args=None, parallel=True, n_cpus=None, verbose=1, **kwargs):
+    ''' For running multiple runs in parallel '''
+
+    # Handle inputs
+    par_args = sc.mergedicts({'ncpus':n_cpus}, par_args) # Handle blank
+
+    # Handle metapars
+    if metapars is None:
+        metapars = {}
+    else:
+        n_runs = len(metapars) # Reset and get from length of list instead
+
+    # Run the sims
+    if isinstance(model, Model): # One model
+        iterkwargs = dict(ind=np.arange(n_runs))
+        iterkwargs.update(dict(metapars=metapars))
+        kwargs = dict(model=model, verbose=verbose, run_args=run_args)
+    elif isinstance(sim, list): # List of sims
+        iterkwargs = dict(model=model, ind=np.arange(len(model)))
+        kwargs = dict(verbose=verbose, run_args=run_args)
+    else:
+        errormsg = f'Must be Model object or list, not {type(model)}'
+        raise TypeError(errormsg)
+
+    # Actually run
+    if parallel:
+        models = sc.parallelize(single_run, iterkwargs=iterkwargs, kwargs=kwargs, **par_args) # Run in parallel
+    else: # Run in serial, not in parallel
+        models = []
+        n_models = len(list(iterkwargs.values())[0]) # Must have length >=1 and all entries must be the same length
+        for s in range(n_models):
+            this_iter = {k:v[s] for k,v in iterkwargs.items()} # Pull out items specific to this iteration
+            this_iter.update(kwargs) # Merge with the kwargs
+            this_iter['model'] = sc.dcp(this_iter['model']) # Ensure we have a fresh sim; this happens implicitly on pickling with multiprocessing
+            model = single_run(**this_iter) # Run in series
+            models.append(model)
+
+    return models
+
+
+
+class MultiModel(BaseModel):
+    def __init__(self, models=None, base_model=None, **kwargs):
+        super().__init__(**kwargs)
+        self.models     = models
+        self.base_model = base_model
+        self.run_args  = sc.mergedicts(kwargs)
+        return
+
+    def __len__(self):
+        try:    return len(self.models)
+        except: return 0
+
+    def run(self, **kwargs):
+        ''' Set up multiple runs of the model with different metapars'''
+
+        if self.models is None:
+            models = self.base_model
+        else:
+            models = self.models
+
+            # Handle missing labels
+            for m,model in enumerate(models):
+                if model.label is None:
+                    model.label = f'Model {m}'
+
+        # Run
+        kwargs = sc.mergedicts(self.run_args, kwargs)
+        self.models = multi_run(models, **kwargs)
+        self.process_results()
+
+        return self
+
+
+    def process_results(self, reduce=True, quantiles=None, doround=True):
+        ''' Process results of multiruns for plots and other outputs'''
+
+        # Initialize
+        if quantiles is None: quantiles = [0.5, 0.25, 0.75]
+        npops = self.base_model.npops
+        nyears = self.base_model.nyears
+
+        # Compile results
+        allresults = sc.objdict()
+        ref_model = self.models[0]
+        for key,res in ref_model.results.items():
+            if type(res) == smu.Result: # Results need to be aggregated
+                allresults[key]         = sc.dcp(res) # Initially just copy the whole thing
+                allresults[key].pops    = np.zeros((len(self),npops,nyears))
+                allresults[key].tot     = np.zeros((len(self),nyears))
+                for m, model in enumerate(self.models): # Now overwrite simulation results
+                    allresults[key].pops[m, :, :] = model.results[key].pops
+                    allresults[key].tot[m, :]     = model.results[key].tot
+            else: # Just copy over other things, like tvecs
+                allresults[key] = sc.dcp(res)
+
+        # Optionally reduce
+        if reduce:
+            self.results = sc.objdict()
+            for key,res in allresults.items():
+                if type(res) == smu.Result:  # Results need to be aggregated
+                    self.results[key]       = sc.dcp(res)  # Initially just copy the whole thing
+                    self.results[key].pops  = np.quantile(res.pops,quantiles,axis=0)
+                    self.results[key].tot   = np.quantile(res.tot,quantiles,axis=0)
+                else: # Just copy over other things, like tvecs
+                    self.results[key] = sc.dcp(res)
+            self.reduced=True
+
+        else:
+            self.reduced=False
+            self.results = allresults
+
+        self.results.type = 'multi'
+        self.results.nruns = len(self)
+
+    def plot(self):
+        ''' Plot the outputs of the model '''
+
+        pass
