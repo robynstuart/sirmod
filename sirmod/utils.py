@@ -161,9 +161,9 @@ def prep_distance(model, fitto=None):
     # Handle inputs
     results = sc.dcp(model.results)
     if fitto is None:
-        fitto = ['pop_size', 'prev']
+        fitto = ['pop_size', 'numinf']
 
-    modely, datay = np.array([]), np.array([])
+    modely, datay = sc.objdict(), sc.objdict()
 
     for key in fitto:
         thisres = results[key]
@@ -173,39 +173,52 @@ def prep_distance(model, fitto=None):
         # First extract datay
         if tmpdata is not None:
             datarows = tmpdata[0]  # Pull out best data
-            nrows = len(datarows)
-            for row in range(nrows):  # Loop over each available row (pops if it's a by-pop result, or single row if it's a total result)
-                datarow = datarows[row]
+            for pn, popkey in enumerate(model.popkeys):
+                newkey = key+'_'+popkey
+                datarow = datarows[pn]
                 thisdatay = datarow[~np.isnan(datarow)]
-                datay = np.append(datay, thisdatay)
+                datay[newkey] = thisdatay
 
                 # Now extract modely, if available
                 if modelrows is not None:
-                    if len(modelrows.shape) > 1:    modelrow = modelrows[row]
+                    if len(modelrows.shape) > 1:    modelrow = modelrows[pn]
                     else:                           modelrow = modelrows
                     thismodely = modelrow[~np.isnan(datarow)]
-                    modely = np.append(modely, thismodely)
+                    modely[newkey] = thismodely
 
     return modely, datay
 
 
-def distance(model=None, data=None, method='wape', eps=1e-3):
+def distance(modely=None, datay=None, fitto='pop_size', method='wape', eps=1e-3):
     ''' Evaluate how well the model fits to the data '''
 
-    if method == 'wape':
-        mismatch = np.sum(abs(model["Y"] - data["Y"]) / np.mean(data["Y"] + eps))
-    elif method == 'mape':
-        mismatch = np.sum(abs(model["Y"] - data["Y"]) / (data["Y"] + eps))
-    elif method == 'mad':
-        mismatch = np.sum(abs(model["Y"] - data["Y"]))
-    elif method == 'mse':
-        mismatch = np.sum((model["Y"] - data["Y"]) ** 2)
-    else:
-        errormsg = f'"method" not known; you entered {method}, but must be one of:\n'
-        errormsg += '"wape" = weighted absolute percentage error (default)\n'
-        errormsg += '"mape" = mean absolute percentage error\n'
-        errormsg += '"mad"  = mean absolute difference\n'
-        errormsg += '"mse"  = mean squared error'
-        raise Exception(errormsg)
+    pops = ['M', 'F'] # TODO Remove hardcoding
+    mismatch = 0
+    for pop in pops:
+        key = fitto+'_'+pop
+        if method == 'wape':
+            thismismatch = np.sum(abs(modely[key] - datay[key]) / np.mean(datay[key] + eps))
+        elif method == 'mape':
+            thismismatch = np.sum(abs(modely[key] - datay[key]) / (datay[key] + eps))
+        elif method == 'mad':
+            thismismatch = np.sum(abs(modely[key] - datay[key]))
+        elif method == 'mse':
+            thismismatch = np.sum((modely[key] - datay[key]) ** 2)
+        else:
+            errormsg = f'"method" not known; you entered {method}, but must be one of:\n'
+            errormsg += '"wape" = weighted absolute percentage error (default)\n'
+            errormsg += '"mape" = mean absolute percentage error\n'
+            errormsg += '"mad"  = mean absolute difference\n'
+            errormsg += '"mse"  = mean squared error'
+            raise Exception(errormsg)
+
+        mismatch += thismismatch
 
     return mismatch
+
+
+def distance_popsize(modely=None, datay=None, method='wape', eps=1e-3):
+    return distance(modely=modely, datay=datay, fitto='pop_size', method=method, eps=eps)
+
+def distance_numinf(modely=None, datay=None, method='wape', eps=1e-3):
+    return distance(modely=modely, datay=datay, fitto='numinf', method=method, eps=eps)
