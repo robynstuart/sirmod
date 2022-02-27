@@ -1,5 +1,5 @@
 '''
-Initialize HPVmod by importing all the modules
+Initialize SIRmod by importing all the modules
 '''
 
 # import requirements
@@ -9,9 +9,9 @@ Initialize HPVmod by importing all the modules
 # if settings.options.verbose:
 #     print(__license__)
 
-# Import the actual model
-from .parameters    import * # Depends on
-from .utils         import * # Depends on defaults
-from .model         import * # Depends on almost everything
+# # Import the actual model
+# from .parameters    import * # Depends on
+# from .utils         import * # Depends on defaults
+# from .model         import * # Depends on almost everything
 
 
