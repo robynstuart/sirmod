@@ -10,7 +10,7 @@ from scipy.stats import truncnorm
 from . import utils as smu
 from . import parameters as smpars
 from . import data as smd
-from . import plotting as smplt
+# from . import plotting as smplt
 
 
 # Define the model
