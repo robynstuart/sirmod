@@ -34,7 +34,7 @@ def test_model():
 def test_fit():
     # Imports
     from sirmod.model import Model
-    from sirmod.utils import prep_distance, distance_popsize, distance_numinf
+    from sirmod.utils import prep_distance, distance_popsize, distance_numinf, distance_prev
     import pyabc
     import tempfile
     from pyabc.populationstrategy import AdaptivePopulationSize
@@ -57,7 +57,7 @@ def test_fit():
         },
     )
 
-    distance = pyabc.AdaptiveAggregatedDistance([distance_popsize, distance_numinf])
+    distance = pyabc.AdaptiveAggregatedDistance([distance_popsize, distance_prev])
 
     # Define actual ABC call
     abc = pyabc.ABCSMC(model.abc_run,
@@ -72,7 +72,7 @@ def test_fit():
     abc.new(db_path, datay);
 
     # Run ABC
-    history = abc.run(max_nr_populations=1_000)
+    history = abc.run(max_nr_populations=500)
     return history, model
 
 

@@ -161,7 +161,7 @@ def prep_distance(model, fitto=None):
     # Handle inputs
     results = sc.dcp(model.results)
     if fitto is None:
-        fitto = ['pop_size', 'numinf']
+        fitto = ['pop_size', 'prev']
 
     modely, datay = sc.objdict(), sc.objdict()
 
@@ -222,3 +222,6 @@ def distance_popsize(modely=None, datay=None, method='wape', eps=1e-3):
 
 def distance_numinf(modely=None, datay=None, method='wape', eps=1e-3):
     return distance(modely=modely, datay=datay, fitto='numinf', method=method, eps=eps)
+
+def distance_prev(modely=None, datay=None, method='wape', eps=1e-3):
+    return distance(modely=modely, datay=datay, fitto='prev', method=method, eps=eps)
